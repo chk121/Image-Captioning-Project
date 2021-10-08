@@ -10,6 +10,36 @@ from tqdm import tqdm
 import random
 import json
 
+def collate_fn(data):
+    """Creates mini-batch tensors from the list of tuples (image, caption).
+    
+    We should build custom collate_fn rather than using default collate_fn, 
+    because merging caption (including padding) is not supported in default.
+    Args:
+        data: list of tuple (image, caption). 
+            - image: torch tensor of shape (3, 256, 256).
+            - caption: torch tensor of shape (?); variable length.
+    Returns:
+        images: torch tensor of shape (batch_size, 3, 256, 256).
+        targets: torch tensor of shape (batch_size, padded_length).
+        lengths: list; valid length for each padded caption.
+    """
+    # Sort a data list by caption length (descending order).
+    data.sort(key=lambda x: len(x[1]), reverse=True)
+    images, captions = zip(*data)
+    
+    # Merge images (from tuple of 3D tensor to 4D tensor).
+    images = torch.stack(images, 0)
+    
+    # Merge captions (from tuple of 1D tensor to 2D tensor).
+    lengths = [len(cap) for cap in captions]
+    targets = torch.zeros(len(captions), max(lengths)).long()
+    for i, cap in enumerate(captions):
+        end = lengths[i]
+        targets[i, :end] = cap[:end]
+    return images, targets, lengths
+
+
 def get_loader(transform,
                mode='train',
                batch_size=1,
@@ -66,21 +96,23 @@ def get_loader(transform,
                           img_folder=img_folder)
 
     if mode == 'train':
-        # Randomly sample a caption length, and sample indices with that length.
-        indices = dataset.get_train_indices()
-        # Create and assign a batch sampler to retrieve a batch with the sampled indices.
-        initial_sampler = data.sampler.SubsetRandomSampler(indices=indices)
-        # data loader for COCO dataset.
-        data_loader = data.DataLoader(dataset=dataset, 
+        # Data loader for COCO dataset
+        # This will return (images, captions, lengths) for every iteration.
+        # images: tensor of shape (batch_size, 3, 224, 224).
+        # captions: tensor of shape (batch_size, padded_length).
+        # lengths: list indicating valid length for each caption. length is (batch_size).
+        data_loader = data.DataLoader(dataset=dataset,
+                                      batch_size=batch_size,
+                                      shuffle=True,
                                       num_workers=num_workers,
-                                      batch_sampler=data.sampler.BatchSampler(sampler=initial_sampler,
-                                                                              batch_size=dataset.batch_size,
-                                                                              drop_last=False))
+                                      drop_last=True,
+                                      collate_fn=collate_fn)
     else:
         data_loader = data.DataLoader(dataset=dataset,
-                                      batch_size=dataset.batch_size,
+                                      batch_size=1,
                                       shuffle=True,
-                                      num_workers=num_workers)
+                                      num_workers=num_workers,
+                                      collate_fn=collate_fn)
 
     return data_loader
 
@@ -116,13 +148,15 @@ class CoCoDataset(data.Dataset):
             image = Image.open(os.path.join(self.img_folder, path)).convert('RGB')
             image = self.transform(image)
 
-            # Convert caption to tensor of word ids.
+            # Convert caption(string) to tensor of word ids.
             tokens = nltk.tokenize.word_tokenize(str(caption).lower())
             caption = []
             caption.append(self.vocab(self.vocab.start_word))
             caption.extend([self.vocab(token) for token in tokens])
             caption.append(self.vocab(self.vocab.end_word))
+#             caption = torch.Tensor(caption).int()
             caption = torch.Tensor(caption).long()
+
 
             # return pre-processed image and caption tensors
             return image, caption

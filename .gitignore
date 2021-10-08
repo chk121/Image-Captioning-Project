@@ -4,3 +4,12 @@ data/
 __pycache__/
 annotations/
 .DS_Store
+training_log.txt
+
+## local test file
+Untitled.ipynb
+
+## result file
+vocab.pkl
+models-attention/
+val2014_res.json
